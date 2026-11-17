@@ -28,6 +28,7 @@ export interface BatteriesCardConfig extends BaseConfig {
 interface BatteriesData {
   readonly key: string;
   readonly stats: StatisticsResult;
+  readonly lastKnown: ReadonlyMap<string, number>;
 }
 
 type Context = CardContext<BatteriesCardConfig, BatteriesData>;
@@ -40,6 +41,8 @@ interface Entry {
 }
 
 const HISTORY_DAYS = 90;
+
+const LAST_KNOWN_DAYS = 730;
 
 const STATUS_TONES: Readonly<Record<BatteryStatus, string>> = {
   critical: 'warn',
@@ -57,6 +60,30 @@ const urgency = (a: Entry, b: Entry): number =>
   (a.trend.daysLeft ?? Number.POSITIVE_INFINITY) - (b.trend.daysLeft ?? Number.POSITIVE_INFINITY) ||
   (a.level ?? 101) - (b.level ?? 101) ||
   a.item.name.localeCompare(b.item.name);
+
+const loadLastKnown = async (
+  hass: HomeAssistant,
+  ids: readonly string[],
+): Promise<Map<string, number>> => {
+  if (ids.length === 0) return new Map();
+
+  const stats = await fetchStatistics(hass, {
+    entityIds: ids,
+    start: Date.now() - LAST_KNOWN_DAYS * DAY,
+    period: 'month',
+    types: ['mean'],
+    units: {},
+  }).catch((): StatisticsResult => new Map());
+  const known = new Map<string, number>();
+
+  for (const [id, rows] of stats) {
+    const mean = rows[rows.length - 1]?.mean;
+
+    if (typeof mean === 'number' && Number.isFinite(mean)) known.set(id, mean);
+  }
+
+  return known;
+};
 
 const sensorIds = (items: readonly BatteryItem[]): string[] =>
   items.map((item) => item.entityId).filter((id) => id.startsWith('sensor.'));
@@ -128,20 +155,23 @@ export class VartaBatteriesCard extends VartaCard<BatteriesCardConfig, Batteries
     config: BatteriesCardConfig,
     hass: HomeAssistant,
   ): Promise<BatteriesData> {
-    const ids = sensorIds(collectBatteries(hass, config.exclude, config.types));
+    const items = collectBatteries(hass, config.exclude, config.types);
+    const ids = sensorIds(items);
     const key = ids.join(',');
+    const stats: StatisticsResult = config.forecast
+      ? await fetchStatistics(hass, {
+          entityIds: ids,
+          start: Date.now() - HISTORY_DAYS * DAY,
+          period: 'day',
+          types: ['mean', 'max'],
+          units: {},
+        })
+      : new Map();
+    const missing = sensorIds(items.filter((item) => item.offline)).filter(
+      (id) => (stats.get(id) ?? []).length === 0,
+    );
 
-    if (!config.forecast || ids.length === 0) return { key, stats: new Map() };
-
-    const stats = await fetchStatistics(hass, {
-      entityIds: ids,
-      start: Date.now() - HISTORY_DAYS * DAY,
-      period: 'day',
-      types: ['mean', 'max'],
-      units: {},
-    });
-
-    return { key, stats };
+    return { key, stats, lastKnown: await loadLastKnown(hass, missing) };
   }
 
   protected renderBody(context: Context): TemplateResult {
@@ -150,10 +180,14 @@ export class VartaBatteriesCard extends VartaCard<BatteriesCardConfig, Batteries
     const items = collectBatteries(hass, config.exclude, config.types);
     const entries: Entry[] = items
       .map((item) => {
-        const trend =
+        const forecast =
           data && config.forecast
             ? trendOf(data.stats.get(item.entityId), item.level, thresholds)
             : {};
+        const trend = {
+          ...forecast,
+          lastKnown: forecast.lastKnown ?? data?.lastKnown.get(item.entityId),
+        };
 
         return {
           item,

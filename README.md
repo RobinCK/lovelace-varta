@@ -85,7 +85,8 @@ entity ID; `*` matches any text, e.g. `Sirio*` or `sensor.*_phone_battery`.
 ### Offline devices — `custom:varta-devices-card`
 
 A device is offline when all its main entities (not diagnostic or configuration ones) are
-`unavailable`. Devices behind the same hub become one group with the hub name, the number of
+`unavailable`. The offline time comes from the history of the last 30 days, so it survives a
+restart of Home Assistant; older outages show as “> 30 d”. Devices behind the same hub become one group with the hub name, the number of
 devices and whether the hub itself is offline; devices of one integration that cannot set up
 become one group with its reason. Tap a group to see its devices, tap a device to open it.
 
@@ -109,7 +110,8 @@ only.
 
 One row per device with a battery level sensor or a low battery binary sensor. Rows are grouped by
 urgency: replace now, low and OK; the OK ones are collapsed into one line with the lowest level.
-An offline device keeps its last known level from the statistics.
+An offline device keeps its last known level from the statistics, even if it has been offline for
+months.
 
 The forecast takes the daily average level of the last 90 days after the last replacement and gives
 the days until the replacement level, or until the battery is empty once it is below that level; a

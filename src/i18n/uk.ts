@@ -57,6 +57,7 @@ export const UK: Readonly<Partial<Record<TranslationKey, string>>> = {
   'devices.devices_many': 'пристроїв',
   'devices.devices_other': 'пристрою',
   'devices.since': 'з {time}',
+  'devices.before': 'до {time}',
   'devices.offline_for': 'офлайн {time}',
   'devices.hub_offline': 'Хаб офлайн',
   'devices.ignore': 'Ігнорувати, доки не повернеться',

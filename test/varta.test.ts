@@ -7,6 +7,7 @@ import {
   trendOf,
 } from '../src/cards/batteries/batteries';
 import type { BatteryStatus } from '../src/cards/batteries/batteries';
+import { mainEntity, wentOffline } from '../src/cards/devices/history';
 import { findOfflineDevices, groupOffline } from '../src/cards/devices/offline';
 import type { ConfigEntries } from '../src/cards/devices/offline';
 import { stillIgnored } from '../src/core/data/ignored';
@@ -235,5 +236,25 @@ describe('format', () => {
     expect(formatAgo(NOW - 33 * 60_000, NOW, t)).toBe('33 min');
     expect(formatAgo(NOW - 5 * 3_600_000, NOW, t)).toBe('5 h');
     expect(formatAgo(NOW - 3 * DAY, NOW, t)).toBe('3 d');
+  });
+});
+
+describe('offline history', () => {
+  it('picks the most telling entity of a device', () => {
+    expect(mainEntity(['sensor.lamp_power', 'binary_sensor.lamp_overheat', 'light.lamp'])).toBe(
+      'light.lamp',
+    );
+  });
+
+  it('finds when a device went offline', () => {
+    expect(
+      wentOffline([
+        { s: 'on', lu: 100 },
+        { s: 'off', lu: 200 },
+        { s: 'unavailable', lu: 300 },
+        { s: 'unavailable', lu: 900 },
+      ]),
+    ).toBe(300_000);
+    expect(wentOffline([{ s: 'unavailable', lu: 100 }])).toBeUndefined();
   });
 });

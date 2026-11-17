@@ -55,6 +55,7 @@ export const EN = {
   'devices.devices_many': 'devices',
   'devices.devices_other': 'devices',
   'devices.since': 'since {time}',
+  'devices.before': 'before {time}',
   'devices.offline_for': 'offline {time}',
   'devices.hub_offline': 'The hub is offline',
   'devices.ignore': 'Ignore until it is back online',

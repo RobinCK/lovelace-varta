@@ -1,6 +1,6 @@
 import { html, nothing } from 'lit';
 import type { CSSResultGroup, PropertyDeclarations, TemplateResult } from 'lit';
-import { MINUTE } from '../../const';
+import { DAY, MINUTE } from '../../const';
 import { VartaCard } from '../../core/base-card';
 import type { BaseConfig, CardContext, RawConfig } from '../../core/base-card';
 import * as cfg from '../../core/config';
@@ -23,6 +23,7 @@ import type { ConfigForm } from '../../ui/form';
 import { pill } from '../../ui/parts';
 import { baseStyles } from '../../ui/styles';
 import { vartaStyles } from '../../ui/varta-styles';
+import { offlineSince, mainEntity } from './history';
 import { deviceName, findOfflineDevices, groupOffline, watchedCount } from './offline';
 import type { ConfigEntries, ConfigEntryInfo, OfflineDevice, OfflineGroup } from './offline';
 
@@ -36,7 +37,17 @@ interface DevicesData {
   readonly entries: ConfigEntries;
   readonly ignored: readonly IgnoredItem[];
   readonly returned: ReadonlySet<string>;
+  readonly since: ReadonlyMap<string, number>;
+  readonly names: ReadonlyMap<string, string>;
+  readonly windowStart: number;
 }
+
+interface Manifest {
+  readonly domain: string;
+  readonly name: string;
+}
+
+const HISTORY_WINDOW = 30 * DAY;
 
 type Context = CardContext<DevicesCardConfig, DevicesData>;
 
@@ -76,14 +87,22 @@ const devicesWord = (count: number, language: string, t: Localize): string => {
   );
 };
 
-const integrationName = (hass: HomeAssistant, domain: string | undefined): string | undefined => {
-  if (domain === undefined) return undefined;
+const loadNames = async (
+  hass: HomeAssistant,
+  domains: readonly string[],
+): Promise<Map<string, string>> => {
+  if (domains.length === 0) return new Map();
 
-  const title = hass.localize?.(`component.${domain}.title`);
+  try {
+    const manifests = await hass.callWS<readonly Manifest[]>({
+      type: 'manifest/list',
+      integrations: domains,
+    });
 
-  if (!title) return domain;
-
-  return title;
+    return new Map(manifests.map((manifest) => [manifest.domain, manifest.name]));
+  } catch {
+    return new Map();
+  }
 };
 
 const loadEntries = async (hass: HomeAssistant): Promise<ConfigEntries> => {
@@ -102,7 +121,9 @@ const ignoredItem = (group: OfflineGroup, now: number): IgnoredItem => ({
   key: group.key,
   name: group.name,
   devices: group.devices.map((device) => device.id),
-  entities: group.devices.flatMap((device) => device.entities.slice(0, 1)),
+  entities: group.devices
+    .map((device) => mainEntity(device.entities))
+    .filter((entityId) => entityId !== undefined),
   at: now,
 });
 
@@ -179,17 +200,21 @@ export class VartaDevicesCard extends VartaCard<DevicesCardConfig, DevicesData> 
       loadEntries(hass),
       loadIgnored(hass).catch((): IgnoredItem[] => []),
     ]);
-    const returned = await returnedSince(hass, ignored).catch(() => new Set<string>());
-    const offline = new Set(
-      findOfflineDevices(hass, entries, config.exclude).map((device) => device.id),
-    );
-    const kept = stillIgnored(ignored, offline, returned);
+    const devices = findOfflineDevices(hass, entries, config.exclude);
+    const windowStart = Date.now() - HISTORY_WINDOW;
+    const domains = [...new Set(devices.map((device) => device.integration).filter(Boolean))];
+    const [returned, since, names] = await Promise.all([
+      returnedSince(hass, ignored).catch(() => new Set<string>()),
+      offlineSince(hass, devices, windowStart).catch(() => new Map<string, number>()),
+      loadNames(hass, domains as string[]),
+    ]);
+    const kept = stillIgnored(ignored, new Set(devices.map((device) => device.id)), returned);
 
     if (kept.length !== ignored.length && canEdit(hass)) {
       await saveIgnored(hass, kept).catch(() => undefined);
     }
 
-    return { entries, ignored: kept, returned };
+    return { entries, ignored: kept, returned, since, names, windowStart };
   }
 
   protected renderBody(context: Context): TemplateResult {
@@ -205,7 +230,10 @@ export class VartaDevicesCard extends VartaCard<DevicesCardConfig, DevicesData> 
       `;
     }
 
-    const devices = findOfflineDevices(hass, data.entries, config.exclude);
+    const devices = findOfflineDevices(hass, data.entries, config.exclude).map((device) => ({
+      ...device,
+      since: data.since.get(device.id) ?? device.since,
+    }));
     const offline = new Map(devices.map((device) => [device.id, device]));
     const ignored = stillIgnored(data.ignored, new Set(offline.keys()), data.returned);
     const ignoredKeys = new Set(ignored.map((item) => item.key));
@@ -276,13 +304,13 @@ export class VartaDevicesCard extends VartaCard<DevicesCardConfig, DevicesData> 
   }
 
   private _renderSub(context: Context, group: OfflineGroup): TemplateResult {
-    const { hass, t, locale } = context;
+    const { data, t, locale } = context;
     const single = group.kind === 'device' ? group.devices[0] : undefined;
+    const domain = group.devices[0]?.integration;
+    const integration = domain === undefined ? undefined : (data?.names.get(domain) ?? domain);
 
     if (single) {
-      const main = [single.area, integrationName(hass, single.integration)]
-        .filter(Boolean)
-        .join(' · ');
+      const main = [single.area, integration].filter(Boolean).join(' · ');
 
       return html`<span class="sub"
         ><span
@@ -292,24 +320,28 @@ export class VartaDevicesCard extends VartaCard<DevicesCardConfig, DevicesData> 
     }
 
     const areas = [...new Set(group.devices.map((device) => device.area).filter(Boolean))];
+    const source = group.kind === 'entry' && integration !== group.name ? integration : undefined;
+    const details = [source, areas.join(', ')].filter(Boolean).join(' · ');
 
     return html`<span class="sub"
       ><span
         ><b>${group.devices.length}</b>
-        ${devicesWord(group.devices.length, locale.language, t)}${areas.length > 0 ? ` · ${areas.join(', ')}` : ''}</span
+        ${devicesWord(group.devices.length, locale.language, t)}${details ? ` · ${details}` : ''}</span
       ></span
     >`;
   }
 
   private _renderSince(context: Context, since: number): TemplateResult {
-    const { t, now, locale } = context;
+    const { data, t, now, locale } = context;
     const parts = agoParts(since, now);
     const sameDay = new Date(since).toDateString() === new Date(now).toDateString();
     const time = sameDay ? formatTime(since, locale) : formatDate(since, locale);
+    const before = data !== undefined && since <= data.windowStart;
 
     return html`<span class="since"
-      ><b>${parts ? html`${parts.value}<small>${t(`unit.${parts.unit}`)}</small>` : t('ago.now')}</b
-      ><span>${t('devices.since', { time })}</span></span
+      ><b
+        >${before ? '>' : ''}${parts ? html`${parts.value}<small>${t(`unit.${parts.unit}`)}</small>` : t('ago.now')}</b
+      ><span>${t(before ? 'devices.before' : 'devices.since', { time })}</span></span
     >`;
   }
 
@@ -488,7 +520,7 @@ export class VartaDevicesCard extends VartaCard<DevicesCardConfig, DevicesData> 
   private _icon(hass: HomeAssistant, group: OfflineGroup): string {
     if (group.kind !== 'device') return GROUP_ICONS[group.kind];
 
-    const entityId = group.devices[0]?.entities[0] ?? '';
+    const entityId = mainEntity(group.devices[0]?.entities ?? []) ?? '';
     const registered = hass.entities?.[entityId]?.icon;
     const attribute = hass.states[entityId]?.attributes.icon;
 

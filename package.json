@@ -1,6 +1,6 @@
 {
   "name": "lovelace-varta",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Varta: Home Assistant Lovelace cards that watch over devices: offline devices grouped by cause and batteries with replacement forecasts.",
   "type": "module",
   "private": true,
