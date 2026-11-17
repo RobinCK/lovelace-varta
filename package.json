@@ -1,0 +1,55 @@
+{
+  "name": "lovelace-varta",
+  "version": "0.1.0",
+  "description": "Varta: Home Assistant Lovelace cards that watch over devices: offline devices grouped by cause and batteries with replacement forecasts.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "Igor Ognichenko",
+  "homepage": "https://github.com/RobinCK/lovelace-varta#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RobinCK/lovelace-varta.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RobinCK/lovelace-varta/issues"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "hacs",
+    "devices",
+    "batteries",
+    "unavailable",
+    "monitoring"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write . && eslint . --fix",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "lit": "^3.3.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "minimatch": "^11.0.8"
+  }
+}
