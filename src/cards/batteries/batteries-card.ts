@@ -6,7 +6,7 @@ import type { BaseConfig, CardContext, RawConfig } from '../../core/base-card';
 import * as cfg from '../../core/config';
 import { navigate } from '../../core/actions';
 import { fetchStatistics } from '../../core/data/statistics';
-import type { StatisticsResult } from '../../core/data/statistics';
+import type { StatisticRow, StatisticsResult } from '../../core/data/statistics';
 import { formatAgo, formatDate, formatNumber } from '../../core/format';
 import type { CardSize, SizeSetting } from '../../core/size';
 import type { HomeAssistant } from '../../types/ha';
@@ -29,6 +29,7 @@ interface BatteriesData {
   readonly key: string;
   readonly stats: StatisticsResult;
   readonly lastKnown: ReadonlyMap<string, number>;
+  readonly lastSeen: ReadonlyMap<string, number>;
 }
 
 type Context = CardContext<BatteriesCardConfig, BatteriesData>;
@@ -61,28 +62,51 @@ const urgency = (a: Entry, b: Entry): number =>
   (a.level ?? 101) - (b.level ?? 101) ||
   a.item.name.localeCompare(b.item.name);
 
-const loadLastKnown = async (
+interface Seen {
+  readonly level: number;
+  readonly time: number;
+}
+
+const lastRow = (rows: readonly StatisticRow[] | undefined): Seen | undefined => {
+  const row = [...(rows ?? [])].reverse().find((item) => typeof item.mean === 'number');
+
+  if (!row || typeof row.mean !== 'number') return undefined;
+
+  return { level: row.mean, time: Math.min(row.end, Date.now()) };
+};
+
+const loadLastSeen = async (
   hass: HomeAssistant,
   ids: readonly string[],
-): Promise<Map<string, number>> => {
-  if (ids.length === 0) return new Map();
+  stats: StatisticsResult,
+): Promise<Map<string, Seen>> => {
+  const seen = new Map<string, Seen>();
+  const missing: string[] = [];
 
-  const stats = await fetchStatistics(hass, {
-    entityIds: ids,
+  for (const id of ids) {
+    const last = lastRow(stats.get(id));
+
+    if (last) seen.set(id, last);
+    else missing.push(id);
+  }
+
+  if (missing.length === 0) return seen;
+
+  const older = await fetchStatistics(hass, {
+    entityIds: missing,
     start: Date.now() - LAST_KNOWN_DAYS * DAY,
-    period: 'month',
+    period: 'day',
     types: ['mean'],
     units: {},
   }).catch((): StatisticsResult => new Map());
-  const known = new Map<string, number>();
 
-  for (const [id, rows] of stats) {
-    const mean = rows[rows.length - 1]?.mean;
+  for (const id of missing) {
+    const last = lastRow(older.get(id));
 
-    if (typeof mean === 'number' && Number.isFinite(mean)) known.set(id, mean);
+    if (last) seen.set(id, last);
   }
 
-  return known;
+  return seen;
 };
 
 const sensorIds = (items: readonly BatteryItem[]): string[] =>
@@ -167,11 +191,14 @@ export class VartaBatteriesCard extends VartaCard<BatteriesCardConfig, Batteries
           units: {},
         })
       : new Map();
-    const missing = sensorIds(items.filter((item) => item.offline)).filter(
-      (id) => (stats.get(id) ?? []).length === 0,
-    );
+    const seen = await loadLastSeen(hass, sensorIds(items.filter((item) => item.offline)), stats);
 
-    return { key, stats, lastKnown: await loadLastKnown(hass, missing) };
+    return {
+      key,
+      stats,
+      lastKnown: new Map([...seen].map(([id, last]) => [id, last.level])),
+      lastSeen: new Map([...seen].map(([id, last]) => [id, last.time])),
+    };
   }
 
   protected renderBody(context: Context): TemplateResult {
@@ -294,7 +321,10 @@ export class VartaBatteriesCard extends VartaCard<BatteriesCardConfig, Batteries
   private _renderRow(context: Context, entry: Entry): TemplateResult {
     const { hass, t, locale, now } = context;
     const { item, trend, status, level } = entry;
-    const changed = Date.parse(hass.states[item.entityId]?.last_changed ?? '');
+    const changed = Math.min(
+      context.data?.lastSeen.get(item.entityId) ?? Number.POSITIVE_INFINITY,
+      Date.parse(hass.states[item.entityId]?.last_changed ?? '') || Number.POSITIVE_INFINITY,
+    );
     const offline = item.offline
       ? t('batteries.offline', {
           time: formatAgo(Number.isFinite(changed) ? changed : now, now, t),
